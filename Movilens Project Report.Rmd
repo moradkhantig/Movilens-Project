@@ -110,7 +110,7 @@ Preliminary data visualizations were performed on the **edx** dataset.
 
 ### 2.2 Building a recommendation system
 
-A movie recommendation was built using two algorithms; linear regression together with regularization and matrix factorization. These algorithms are defined and further discussed below.
+A movie recommendation was built using two algorithms; linear regression together with regularization and matrix factorization. These algorithms are defined and further discussed below. All discussions of linear regression applied to movie recommendation comes from the Harvard edx course on machine learning.
 
 ### 2.2.1 Linear Regression
 
@@ -315,6 +315,8 @@ knitr::kable(TabNew,booktabs = TRUE,caption = "Linear Model Training Approach") 
 First we trained the linear model without including the regularization penalty term. The modeling results are depicted in Table 5 below which compares the RMSE values. As we can see from this table, including bias effects substantially improved the RMSE value. We saw a decrease of 0.12 in RMSE between models 1 and 2, indicating that only using the average is a poor training model and that a better training model should include bias effects. Further, there was a decrease of approximately 0.2 in RMSE between models 2 and 3, suggesting that when the user effect is included in the training model, there is an additional improvement in our ability to better make movie recommendations.
 
 ```{r message = FALSE, warning = FALSE ,echo = FALSE}
+### Note: the codes used here and below for training linear regression come from the
+### edx course on machine learning
 ## Here we train the linear model on the train_set ##
 # First define the RMSE and MSE
 RMSE <- function(true_ratings,predicted_ratings){
@@ -423,7 +425,7 @@ knitr::kable(PredComp2,booktabs = TRUE,caption = "Linear Model RMSE Comparisons 
 
 ### 3.2.2 Movie Predictions with Matrix Factorization
 
-As was discussed in section 2, matrix factorization seeks to construct a matrix which contains user-item observations where the columns and rows of the matrix represent items and users and the entries contain the ratings users give to the items. This matrix is constructed as a product of two lower dimension latent factor matrices. First we experimented with algorithms found in the **recommmenderlab** package but found that executing them takes a very long time. Therefore, we next looked at using the **recosystem** package. The **recosystem** package is a wrapper of the LIBFM library which is used for recommendation systems using parallel matrix factorization (see [Recosystem documentation](https://cran.r-project.org/web/packages/recosystem/vignettes/introduction.html). Additionally, the **recosystem** package contains many of the features of the LIBFM library, in addition to several user-friendly R functions which help to simplify data processing and model assembly. The main steps of the **recosytem** package are defined as follows:
+As was discussed in section 2, matrix factorization seeks to construct a matrix which contains user-item observations where the columns and rows of the matrix represent items and users and the entries contain the ratings users give to the items. This matrix is constructed as a product of two lower dimension latent factor matrices. First we experimented with algorithms found in the **recommmenderlab** package but found that executing them takes a very long time. Therefore, we next looked at using the **recosystem** package. The **recosystem** package is a wrapper of the LIBFM library which is used for recommendation systems using parallel matrix factorization (see [Recosystem documentation](https://cran.r-project.org/web/packages/recosystem/vignettes/introduction.html)). Additionally, the **recosystem** package contains many of the features of the LIBFM library, in addition to several user-friendly R functions which help to simplify data processing and model assembly. The main steps of the **recosytem** package are defined as follows:
 
 1.  construction of a model object;
 2.  selection of ideal tuning parameters;
@@ -478,7 +480,11 @@ r <- Reco()
 
 # Then select ideal tuning parameters by running r$tune() on the
 # trainset. Save the tuning parameters in object called opts. Note
-# that this step takes time to execute.
+# that this step takes time to execute. Recommendations for which parameters to tune
+# and what values to use for the "nthread" and "niter" parameters comes from the
+# following R blog on the recosystem package: 
+# https://www.r-bloggers.com/2016/07/recosystem-recommender-system-using-parallel-matrix-factorization/. This blog gives a brief overview of how the recosystem package
+# works.
 opts <- r$tune(trainset,opts = list(dim = c(10,20,30),
                                     costp_l2 = c(0.01,0.1),
                                     costq_l2 = c(0.01,0.1),
