@@ -1,0 +1,576 @@
+---
+title: "Construction of a Movie Recommendation System Using the Movielens Database"
+author: "Tiglath Moradkhan"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document:
+    fig_caption: yes
+bibliography: Movilens-Project.bib
+csl: archives-of-toxicology.csl
+header-includes:
+ \usepackage{float}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,fig.pos = "H")
+```
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE}
+####  First prep the required datsets. See code below:
+
+##########################################################
+# Create edx and final_holdout_test sets 
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(knitr)) install.packages("knitr",repos = "http://cran.us.r-project.org")
+if(!require(kableExtra)) install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(knitr)
+library(kableExtra)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+options(timeout = 120)
+
+dl <- "ml-10M100K.zip"
+if(!file.exists(dl))
+  download.file("https://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings_file <- "ml-10M100K/ratings.dat"
+if(!file.exists(ratings_file))
+  unzip(dl, ratings_file)
+
+movies_file <- "ml-10M100K/movies.dat"
+if(!file.exists(movies_file))
+  unzip(dl, movies_file)
+
+ratings <- as.data.frame(str_split(read_lines(ratings_file), fixed("::"), simplify = TRUE),
+                         stringsAsFactors = FALSE)
+colnames(ratings) <- c("userId", "movieId", "rating", "timestamp")
+ratings <- ratings %>%
+  mutate(userId = as.integer(userId),
+         movieId = as.integer(movieId),
+         rating = as.numeric(rating),
+         timestamp = as.integer(timestamp))
+
+movies <- as.data.frame(str_split(read_lines(movies_file), fixed("::"), simplify = TRUE),
+                        stringsAsFactors = FALSE)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- movies %>%
+  mutate(movieId = as.integer(movieId))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Final hold-out test set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.6 or later
+# set.seed(1) # if using R 3.5 or earlier
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in final hold-out test set are also in edx set
+final_holdout_test <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from final hold-out test set back into edx set
+removed <- anti_join(temp, final_holdout_test)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+# Executive Summary
+
+Recommendation systems function by evaluating data collected about the likely behaviors and patterns of customers and then provide suggestions based on the evaluations. These suggestions are helpful in allowing users to easily search for products or services based on the least available information. Recommender systems have varied applications, of which one of them is suggesting movies to watch based on data collected from many customers.
+
+In this project, we used the 10M Movilens dataset developed and hosted by the GroupLens research group to build a movie recommendation system. The 10M Movielens datset was split into an **edx** and **final_holdout_test** sets. Two different machine learning algorithms were trained on further splits of the **edx** dataset. These were linear regression and matrix factorization. The linear regression algorithm fitted a linear equation which included bias effects such as movie and user effects together with regularization penalty terms. In contrast, for matrix factorization we used the LIBMF method in the **recosystem** package. Based on reported RMSE values, we found that matrix factorization was a better algorithm to use to build a movie recommendation system. We then applied matrix factorization on the **final_holdout_test** dataset and obtained an RMSE of approximately 0.78, which is below the required threshold of 0.86.
+
+# 1. Introduction
+
+The movielens dataset is a dataset containing approximately 11 million user ratings of about 27,000 movies, developed by the GroupLens research group (see [Movilens Dataset](https://grouplens.org/datasets/movielens/20m/)).
+
+For this project, the 10M version of the dataset was used to build a recommedation system. The 10M version contains 10 million ratings of 10,000 movies (see [10M Movielens Dataset](https://grouplens.org/datasets/movielens/10m/)).For the purposes of this excercise, the dataset was split into an **edx** and a **final_holdout_test** dataset. The **edx** dataset was used for preliminary data visualizations and for building the recommendation system, while the **final_holdout_test** dataset was used to evaluate how close the predictions from the recommendation system were to the true values.
+
+# 2. Methods
+
+The 10M Movilens dataset was downloaded and split into two sets; an **edx** dataset which contains 10% of the original 10M movilens data and **final_holdout_test** which was used as a validation dataset to test the predictions made using the **edx** dataset.
+
+### 2.1 Data Visualization
+
+Preliminary data visualizations were performed on the **edx** dataset.
+
+### 2.2 Building a recommendation system
+
+A movie recommendation was built using two algorithms; linear regression together with regularization and matrix factorization. These algorithms are defined and further discussed below.
+
+### 2.2.1 Linear Regression
+
+In general, linear regression assumes that the data can be separated into a linear combination of weights, $w$ given to each feature $x$ as shown by equation 1 below. In addition, linear regression also includes a bias term which is equal to b [@jovel2021].
+
+```{=tex}
+\begin{equation}
+Y = w_1\times x_1 + w_2\times x_2 + ... + w_n\times x_n + b
+\end{equation}
+```
+In the case of movie recommendations, the linear model is defined by the following equation
+
+```{=tex}
+\begin{equation}
+Y_{u,i} = \mu + \epsilon_{u,i} + b_i
+\end{equation}
+```
+In this model, $Y_{u,i}$ represents the rating for movie *i* by user *u*, $\mu$ is the true rating for all users and movies, $b_i$ is the average ranking of movie *i* and occurs as a result of the movie effect where some movies are generally rating higher than others, and $\epsilon_{u,i}$ represent independent errors for movie *i* by user *u*.
+
+In the case of modeling movie predictions, the simplest assumption is that the rating is the same for all movies and users and any differences are due to random variation. With this assumption, equation 2 simplifies to:
+
+```{=tex}
+\begin{equation}
+Y_{u,i} = \mu + \epsilon_{u,i}
+\end{equation}
+```
+However, movie ratings may be influenced by two additional effects defined as the movie and the user effect. The movie effect as explained above, arises as a result of some movies receiving higher rates than others. The inclusion of the movie effect in the linear model is depicted in equation 2 above. In contrast, the user effect occurs as a result of different rating patterns among different users. For example, some users may tend to consistently rate movies they like as 4 and 5; while other users may dislike most movies and give rates of 1 or 2. In the linear model, the user effect is defined by the variable $b_u$. With the user effect, equation 2 becomes as shown below.
+
+```{=tex}
+\begin{equation}
+Y_{u,i} = \mu + \epsilon_{u,i} + b_i + b_u
+\end{equation}
+```
+The movie and user effects are themselves calculated as depicted below.
+
+```{=tex}
+\begin{equation}
+\hat{b_i} = \frac{1}{N}\sum_{i = 1}^{N}(y_i - \hat{\mu})
+\end{equation}
+```
+```{=tex}
+\begin{equation}
+\hat{b_u} = \frac{1}{N}\sum_{i = 1}^{N}(y_{u,1} - \hat{b_i} - \hat{\mu})
+\end{equation}
+```
+### 2.2.2 Regularization
+
+Although the linear model is a good algorithm for movie predictions, it does not take into account the fact that there may be movies which are rated by few users. Regularization can help to penalize large estimates that result from small samples sizes, thus constraining the total variability of effect sizes such as those coming from either the movie or user effect defined in Section 2.2.1. In regularization the equation shown below is minimized.
+
+
+\begin{equation}
+\frac{1}{N}\sum_{u,i}(y_{u,i} - \mu - b_i)^2 + \lambda\sum_{i}b_i^2
+\end{equation}
+
+In equation 7, the first part is the mean squared and the second is the penalty term which increases as the magnitude of the *b* values increases. The value of *b* which minimizes equation 7 is calculated as follows.
+
+
+\begin{equation}
+\hat{b_i}(\lambda) = \frac{1}{\lambda + n_i}\sum_{u = 1}^{n_i}(Y_{u,i} - \hat{\mu})
+\end{equation}
+
+where, $n_i$ is the number of ratings *b* for movie *i*
+
+### 2.2.3 Matrix Factorization
+
+In matrix factorization, a matrix is constructed to contain the ratings that users give to a product, which in this case are movies. The rows are columns of this matrix represent users and items, respectively while the entries in the matrix contain user ratings. Since users tend to consume a portion of movies, most of the entries in the matrix will be missing. The purpose of matrix factorization is build a model that will be able to predict movies for users based on user-item observations.
+
+The model assumes that the ratings matrix can be constructed as the product of two lower dimension matrices, known as latent factors [@therprojectforstatisticalcomputing2023h]. This is represented as follows.
+
+
+\begin{equation}
+R = P^TQ
+\end{equation}
+
+where $R$ is the ratings matrix with size $n\times m$ and $P$ and $Q$ are the latent factors. $P$, which has size $k\times n$, represents users while items are represented by $Q$ which has size $k\times n$. The value $k$ is equivalent to the number of latent features.
+
+As discussed above for the linear model, user ratings are typically biased and are affected by small sample sizes; therefore to improve the model, bias terms together with a penalty regularization term are introduced [@strömqvist2018a]. The model, therefore becomes
+
+
+\begin{equation}
+R = P^TQ + b_i + b_u
+\end{equation}
+
+and the minimization equation to solve is given by
+
+
+\begin{equation}
+\sum_{u,i \in K}(r_{u,i} - p_{u}q_{i}^T)^2 + \lambda(||q_{i}||^2 + ||p_u||^2)
+\end{equation}
+
+In equation 10, $q_i$ is the latent vector for item *i*, $p_u$ is the latent vector for user *u*, $\lambda$ is the regularization penalty term, and $||.||^2$ is the matrix norm.
+
+Matrix factorization utilizes two different algorithms; memory based collaborative filtering (CF) and model-based CF [@hahsler2022f]. Memory-based CF algorithms apply either the whole or a large sample of the user database to make recommendations, while model-based CF algorithms utilize the user database to first learn a more compact model such as clusters of users which have similar preference. This compact model is then used to make recommendations.
+
+# 3. Results
+
+## 3.1 Exploratory Data Analysis
+
+We first looked at the distribution of the number of ratings among users.The results of this analysis are shown in Table 1 and Figure 1 below which depict the mean distribution of ratings. According to Table 1 and Figure 1, while there are some users who give ratings of below 3, the mean for those ratings is smaller than the mean of ratings higher than 3.
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE}
+Tab1 <- edx %>% group_by(rating) %>% summarize(avgnumber = mean(n()))
+
+knitr::kable(Tab1,booktabs = TRUE,caption = "The mean distribution of the number of ratings") %>% column_spec(1,border_left = T, border_right = T) %>% kable_styling(latex_options = "hold_position") 
+```
+
+
+
+```{r fig1, message = FALSE, warning = FALSE ,echo = FALSE,fig.pos = "H",fig.cap = "Mean distribution of the number of ratings"}
+Fig1 <- edx %>% group_by(rating) %>% 
+  summarize(avgnumber = mean(n())) %>%
+  ggplot(aes(rating,avgnumber)) + geom_bar(stat = "identity") +
+  xlab("Ratings") + ylab("Average number of ratings") +
+  scale_y_continuous(breaks = seq(4000,4000000,200000))
+Fig1
+```
+
+
+
+We also looked at the frequency of ratings. This analysis is shown in Table 2 and Figure 2 below. Similar to the data presented in Table 1 and Figure 1, users have a preference for ratings of 3 and 4. Additionally, according to Table 2 and Figure 2, half number ratings have smaller frequencies compared to whole number ratings, possibly indicating a higher preference for whole number ratings.
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE}
+Tab2 <- edx %>% group_by(rating) %>% count() %>%
+  rename(Rating = rating, count = n) %>%
+  mutate(Frequency = count/nrow(edx)) %>%
+  select(Rating,Frequency)
+
+knitr::kable(Tab2,booktabs = TRUE,caption = "The frequency distribution of the number of ratings") %>% column_spec(1,border_left = T, border_right = T) %>% kable_styling(latex_options = "hold_position")
+```
+
+
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE,fig.pos = "H",fig.cap = "Frequency of the number of ratings"}
+fig2 <- edx %>% group_by(rating) %>% count() %>%
+  rename(Rating = rating, count = n) %>%
+  mutate(Frequency = count/nrow(edx)) %>%
+  ggplot(aes(Rating,Frequency)) + geom_bar(stat = "identity") +
+  xlab("Ratings") + ylab("Frequency of ratings")
+fig2
+```
+
+
+As indicated above, there seems to be a higher preference for whole number ratings. This observation is further supported by the data in Table 3 which is a summary of the top 10 movie ratings.
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE}
+Tab3 <- edx %>% group_by(rating) %>%
+  rename(Rating = rating) %>%
+  summarize(Number = n()) %>%
+  top_n(5) %>% arrange(desc(Number))
+knitr::kable(Tab3,booktabs = TRUE,caption = "A summary of the top 5 movie ratings") %>% column_spec(1,border_left = T, border_right = T) %>% kable_styling(latex_options = "hold_position")
+```
+
+
+## 3.2 Model Training
+
+To develop our movie recommendation system, we split the edx dataset into a training set and a test set. The training set contained 10% of the edx dataset and the test set contained the remaining 90%.
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE}
+set.seed(1, sample.kind="Rounding") # if using R 3.6 or later
+# set.seed(1) # if using R 3.5 or earlier
+# Split edx dataset by creating a train_set which will be used to
+# train the model and a test_set to calculate the RMSE value of the
+# trained model
+test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
+train_set <- edx[-test_index,]
+temp <-  edx[test_index,]
+
+# Make sure userId and movieId in test_set are also in train_set
+test_set <- temp %>% 
+  semi_join(train_set, by = "movieId") %>%
+  semi_join(train_set, by = "userId")
+
+# Add rows removed from test_set back into  train_set
+removed <- anti_join(temp, test_set)
+train_set <- rbind(train_set, removed)
+
+rm(test_index, temp, removed)
+```
+
+We then trained the training set using the linear model and matrix factorization. To assess the strength of each model, we calculated and reported the RMSE of each model on the testing dataset. The goal was to obtain an RMSE value that is smaller than 0.86.
+
+### 3.2.1 Linear Modeling
+
+To train the linear model on the training set we tested each of the terms in equation 4 in section 2.21 and compared their effect on the RMSE. The RMSE is given by
+
+
+\begin{equation}
+\mbox{RMSE} = \sqrt{\frac{1}{N}\sum_{u,i}(\hat{y}_{u,i} - y_{u,i})^2}
+\end{equation}
+
+We also experimented with the addition of the regularization penalty term to equation 4.The approach we used for for training the linear model is shown in Table 4 below.
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE}
+TabNew <- data_frame("Model" = c("Model 1","Model 2","Model 3","Model 4"),
+                      "Method" = c("Average Only Model","Movie Effect Model","User Effect Model","Regularization Model"))
+knitr::kable(TabNew,booktabs = TRUE,caption = "Linear Model Training Approach") %>% column_spec(1,border_left = T, border_right = T) %>% kable_styling(latex_options = "hold_position")
+```
+
+#### 3.2.1.1 Linear Modeling Without Regularization
+
+\hfill\break
+First we trained the linear model without including the regularization penalty term. The modeling results are depicted in Table 5 below which compares the RMSE values. As we can see from this table, including bias effects substantially improved the RMSE value. We saw a decrease of 0.12 in RMSE between models 1 and 2, indicating that only using the average is a poor training model and that a better training model should include bias effects. Further, there was a decrease of approximately 0.2 in RMSE between models 2 and 3, suggesting that when the user effect is included in the training model, there is an additional improvement in our ability to better make movie recommendations.
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE}
+## Here we train the linear model on the train_set ##
+# First define the RMSE and MSE
+RMSE <- function(true_ratings,predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+# Start with Model 1 which is just the average
+AverageRate = mean(train_set$rating, na.rm = TRUE)
+naive_rmse <- RMSE(test_set$rating,AverageRate)
+
+## Model 2: add in the movie effect
+# Create a dataframe MovieAvg which groups on movieID which the variable we want
+# since we are investigating movie effects on the linear model. Then calculate the
+# movie effect valuem b_i.
+MovieAvg <- train_set %>% group_by(movieId) %>%
+  summarize(b_i = mean(rating - AverageRate))
+
+# Create a dataframe MoviePred which will store the movie predictions with movie
+# effects included.
+MoviePred <- AverageRate + test_set %>% 
+  left_join(MovieAvg, by='movieId') %>% .$b_i
+
+# Report the RMSE and MSE values with movie effects included
+MovieEffectRMSE <- RMSE(MoviePred,test_set$rating)
+
+## Model 3: Include movie and user effects
+# Create dataframe UserAvg by joining with MovieAvg. Then need to group on userID
+# as this is the variable needed to determine user effects
+UserAvg <- train_set %>% left_join(MovieAvg,by ='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating-AverageRate-b_i))
+
+# Create dataframe UserEffectPred which will store movie predictions with
+# user effects included.
+UserEffectPred <- test_set %>% left_join(MovieAvg,by='movieId') %>%
+  left_join(UserAvg,by='userId') %>% 
+  mutate(preds = AverageRate + b_i + b_u)
+
+# Report RMSE value with movie and user effects included
+UserEffectRMSE <- RMSE(UserEffectPred$preds,test_set$rating)
+
+# Now create a table to hold the RMSE and MSE values. This table 
+# will be table 5 in the report.
+PredComp <- data_frame(Model = c("Model 1","Model 2","Model 3"),
+                       "Method" = c("Average Only Model","Movie Effect Model","User Effect Model"), 
+                       RMSE= c(naive_rmse,MovieEffectRMSE,UserEffectRMSE))
+knitr::kable(PredComp,booktabs = TRUE,caption = "Linear Model RMSE Comparisons") %>% column_spec(1,border_left = T, border_right = T) %>% kable_styling(latex_options = "hold_position")
+```
+
+
+#### 3.2.1.2 Linear Modeling With Regularization
+
+\hfill\break
+Next we trained the linear model by including the regularization penalty term. To determine what regularization penalty term value would improve the RMSE, we first performed cross-validation on the training set using tuning values ranging from 0 to 25 with incremental steps of 0.25, and then used the optimal regularization penalty term from cross-validation to regularize the movie and user effects. Table 6 shown below depicts the RMSE values when regularization is introduced in the model. According to these results, regularizing the movie and user effects did not improve our ability to better predict movies. Because of this poor performance we next sought to compare the linear model with matrix factorization. The results of this analysis are shown in the next section.
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE}
+## Here we regularize the movie and user effect combinations by running a
+##  cross-validation on the train_set to select the best lambda tuning parameter
+# Run cross-validation on train_set
+lambdas <- seq(0,10,0.25)
+rmses <- sapply(lambdas,function(l){
+  mu <- mean(train_set$rating)
+  b_i <- train_set %>% group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  b_u <- train_set %>% left_join(b_i,by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  predicted_ratings <-
+    test_set %>%
+    left_join(b_i,by='movieId') %>%
+    left_join(b_u,by='userId') %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    .$pred
+  return(RMSE(predicted_ratings,test_set$rating))
+})
+
+# Now pick the best lambda
+lambda_opt <- lambdas[which.min(rmses)]
+
+# Now we apply the best lambda to regularize the movie and user effects
+AverageRate <- mean(train_set$rating)
+
+RegMovieEffect <- train_set %>% group_by(movieId) %>%
+  summarize(b_i = sum(rating - AverageRate)/(n()+lambda_opt))
+
+RegUserEffect <- train_set %>% left_join(RegMovieEffect,by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - AverageRate)/(n()+lambda_opt))
+
+# Now create a dataframe called RegMoviePred which will store the movie predictions
+RegMoviePred <- test_set %>%
+  left_join(RegMovieEffect,by='movieId') %>%
+  left_join(RegUserEffect,by='userId') %>%
+  mutate(preds = AverageRate+b_i+b_u)
+
+# Finally report RMSE value
+RegRMSE <- RMSE(test_set$rating,RegMoviePred$preds)
+
+# Now expand Table 5 to add in the RMSE values for the regularization penalty term
+PredComp2 <- data_frame(Model = c("Model 1","Model 2","Model 3","Model 4"),
+                       "Method" = c("Average Only Model","Movie Effect Model","User Effect Model","Regularization Model"), 
+                       RMSE = c(naive_rmse,MovieEffectRMSE,UserEffectRMSE,RegRMSE))
+knitr::kable(PredComp2,booktabs = TRUE,caption = "Linear Model RMSE Comparisons with Regularization Added") %>% column_spec(1,border_left = T, border_right = T) %>% kable_styling(latex_options = "hold_position")
+```
+
+
+### 3.2.2 Movie Predictions with Matrix Factorization
+
+As was discussed in section 2, matrix factorization seeks to construct a matrix which contains user-item observations where the columns and rows of the matrix represent items and users and the entries contain the ratings users give to the items. This matrix is constructed as a product of two lower dimension latent factor matrices. First we experimented with algorithms found in the **recommmenderlab** package but found that executing them takes a very long time. Therefore, we next looked at using the **recosystem** package. The **recosystem** package is a wrapper of the LIBFM library which is used for recommendation systems using parallel matrix factorization (see [Recosystem documentation](https://cran.r-project.org/web/packages/recosystem/vignettes/introduction.html). Additionally, the **recosystem** package contains many of the features of the LIBFM library, in addition to several user-friendly R functions which help to simplify data processing and model assembly. The main steps of the **recosytem** package are defined as follows:
+
+1.  construction of a model object;
+2.  selection of ideal tuning parameters;
+3.  training the model by using the ideal tuning parameters selected in step 2 and;
+4.  using the trained model to make predictions
+
+According to the documentation, the **recosystem** package provides the following parameters to select for tuning:
+
+1.  *dim*: the number of latent factors;
+2.  *costpl1*: the L1 regularization cost applied to user factors;
+3.  *costpl2*: the L2 regularization cost applied to user factors;
+4.  *costql1*: the L1 regularization cost applied to item factors;
+5.  *costql2*: the L2 regularization cost applied to item factors; and
+6.  *lrate*: the learning rate, which is the step size in gradient descent[^1]
+
+[^1]: The algoirthm used here applies gradient descent to find optimal values for the user and item matrices in order to minimize the error between actual and predicted ratings.
+
+Table 7, below, compares reported RMSE values for the linear model and matrix factorization. According to this data, matrix factorization substantially improved the RMSE value. With matrix factorization, the RMSE decreased from approximately 0.88 to 0.79. This indicates that matrix factorization improves our ability to make movie predictions.
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE, results = FALSE}
+# Install the recosystem package
+if(!require(recosystem)) install.packages("recosystem", repos = "http://cran.us.r-project.org")
+library(recosystem)
+
+set.seed(123,sample.kind="Rounding")
+
+# From train_set and test_set only select userId, movieId, and rating as these
+# the columns needed to run recosystem
+
+train_set_small <- train_set %>% select(userId,movieId,rating)
+test_set_small <- test_set %>% select(userId,movieId,rating)
+
+trainset <- data_memory(user_index = train_set_small$userId,
+                        item_index = train_set_small$movieId,
+                        rating = train_set_small$rating)
+
+testset <- data_memory(user_index = test_set_small$userId,
+                        item_index = test_set_small$movieId,
+                        rating = test_set_small$rating)
+
+# trainset <- with(train_set,data_memory(user_index = userId,
+                                       #item_index = movieId,
+                                       #rating = rating))
+
+# testset <- with(test_set,data_memory(user_index = userId,
+                                     #item_index = movieId,
+                                     #rating = rating))
+
+# Now we need to create the model object, defined as r, by calling
+# the Reco() function
+r <- Reco()
+
+# Then select ideal tuning parameters by running r$tune() on the
+# trainset. Save the tuning parameters in object called opts. Note
+# that this step takes time to execute.
+opts <- r$tune(trainset,opts = list(dim = c(10,20,30),
+                                    costp_l2 = c(0.01,0.1),
+                                    costq_l2 = c(0.01,0.1),
+                                    costp_l1 = 0,
+                                    costq_l1 = 0,
+                                    lrate = c(0.01,0.1),
+                                    nthread = 4,
+                                    niter = 10))
+
+# Then train the model on trainset using the optimal tuning
+# paramenters stored in opts
+r$train(trainset,opts = c(opts$min,nthread = 4,niter = 20))
+
+# Predict movies based on testset
+MoviePredReco <- r$predict(testset,out_memory())
+
+# Report RMSE value
+RMSE_Reco <- RMSE(test_set$rating,MoviePredReco)
+```
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE}
+# Create new table reporting RMSE values from linear modeling and
+# matrix factorization
+PredComp3 <- data_frame(Model = c("Model 1","Model 2","Model 3","Model 4",
+                                  "Matrix Factorization"),
+                       Method = c("Average Only Model","Movie Effect Model",
+                                     "User Effect Model","Regularization Model",
+                                    "Recosystem"), 
+                       RMSE = c(naive_rmse,MovieEffectRMSE,UserEffectRMSE,RegRMSE,
+                                RMSE_Reco))
+
+knitr::kable(PredComp3,booktabs = TRUE,caption = "Linear Model and Matrix Factorization RMSE Comparisons") %>% column_spec(1,border_left = T, border_right = T) %>% kable_styling(latex_options = "hold_position")
+```
+
+
+## 3.3 Final Model Validation
+
+The purpose of this project was to first find an optimal machine learning algorithm by training it on the **edx** dataset, and then applying it to **final_holdout_test**. Based on the modeling results from the linear and matrix factorization algorithms above, we applied matrix factorization on **final_holdout_test**. The reported MSE value for making movie predictions using matrix factorization on the **final_holdout_test** was 0.78. This is smaller than the required threshold RMSE value of 0.86.
+
+```{r message = FALSE, warning = FALSE ,echo = FALSE, results = FALSE}
+
+set.seed(123,sample.kind="Rounding")
+
+# Here edx is our training set and final_holdout_test is our test set. From these
+# two datasets we select userId, movieId, and rating
+
+edx_small <- edx %>% select(userId,movieId,rating)
+final_holdout_test_small <- final_holdout_test %>% select(userId,movieId,rating)
+
+edx_train <- data_memory(user_index = edx_small$userId,
+                                       item_index = edx_small$movieId,
+                                       rating = edx_small$rating)
+
+FinalTest <- data_memory(user_index = final_holdout_test_small$userId,
+                                     item_index = final_holdout_test_small$movieId,
+                                     rating = final_holdout_test_small$rating)
+
+# Create the model object, r
+r <- Reco()
+
+# Then select ideal tuning parameters by running r$tune() on edx_train. Save
+# the tuning parameters in object called opts. Note this this step takes time to
+# execute.
+
+opts <- r$tune(edx_train,opts = list(dim = c(10,20,30),
+                                    costp_l2 = c(0.01,0.1),
+                                    costq_l2 = c(0.01,0.1),
+                                    costp_l1 = 0,
+                                    costq_l1 = 0,
+                                    lrate = c(0.01,0.1),
+                                    nthread = 4,
+                                    niter = 10))
+
+# Then train the model on trainset using the optimal tuning paramenters stored
+# in opts
+r$train(edx_train,opts = c(opts$min,nthread = 4,niter = 20))
+
+# Predict movies based on FinalTest
+FinalMoviePredReco <- r$predict(FinalTest,out_memory())
+
+# Report RMSE value
+FinalRMSE_Reco <- RMSE(final_holdout_test$rating,FinalMoviePredReco)
+FinalRMSE_Reco
+```
+
+# 4. Conclusion
+
+The goal of this project was to build a movie recommendation system using the 10M Movielens dataset. This dataset was split into an **edx** set and a **final_holdout_test** set. Two different machine learning algorithms were trained on the **edx**. The first involved fitting a linear equation that included movie and user biases together with regularization, and the second involved using the **recosystem** package which applies the LIBMF matrix factorization algorithm. For each algorithm that was trained and then used to make movie predictions, the resulting RMSE was calculated. Based on the results we found that matrix factorization had a substantial improvement on the RMSE value. For the final validation we applied matrix factorization using **edx** as the training set and **final_holdout_test** as the test set and calculated an RMSE value of approximately 0.78, which is smaller than the required threshold of 0.86.
+
+When we trained the linear model, we saw that movie and user effect biases are important to include as they improve the movie recommender. While we only included movie and user effect biases, we did not consider the possibility that there may also be genre effect biases which could also have an impact on movie recommendation systems. Future work should expand the linear model to include these additional biases. Secondly, when we sought to use matrix factorization as our second machine learning algorithm, we first experimented with algorithms in the **recommenderlab** package; however, a major limitation that we encountered is that some of these take hours to execute with a small laptop. Therefore, we had to use the **recosystem** package which was easier to implement. It may be that there are additional matrix factorization machine learning algorithms that may be better than the LIBMF method provided in the **recosystem** package. Therefore, with a more powerful powerful computer, other matrix factorization algorithms should be explored to determine which of these could be a better movie recommender. Another related issue with computer power was our inability to tune all of the possible tuning parameters provided in the **recosystem** package, which could possibly indicate that our reported RMSE on the validation dataset is not optimal. Thus, with a more powerful computer, all of these possible tuning parameters should be tuned. Finally, it should be noted that the 10M Movilens dataset excludes other important variables such as user behavior which influence movie ratings, and thus impact how a movie recommender is trained. To improve the movie recommendation system, a dataset similar to that used by for example Netflix should be applied.
+
+# 5. References
+
+::: {#refs}
+:::
