@@ -253,7 +253,7 @@ fig2
 ```
 
 
-As indicated above, there seems to be a higher preference for whole number ratings. This observation is further supported by the data in Table 3 which is a summary of the top 10 movie ratings.
+As indicated above, there seems to be a higher preference for whole number ratings. This observation is further supported by the data in Table 3 which is a summary of the top 5 movie ratings.
 
 ```{r message = FALSE, warning = FALSE ,echo = FALSE}
 Tab3 <- edx %>% group_by(rating) %>%
